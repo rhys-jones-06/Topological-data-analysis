@@ -12,9 +12,8 @@ global market shape from financial data. It includes:
 
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Tuple, Union, Optional
+from typing import Dict, Tuple, Union, Optional
 from ripser import ripser
-from sklearn.metrics import pairwise_distances
 
 
 def build_vietoris_rips_filtration(
@@ -46,9 +45,7 @@ def build_vietoris_rips_filtration(
     dict
         Dictionary containing the Vietoris-Rips filtration result with keys:
         - 'distance_matrix': The distance matrix used
-        - 'dgms': Persistence diagrams for each homology dimension
-        - 'num_edges': Number of edges in the Rips complex
-        - 'cocycles': Cocycle representatives (if computed)
+        - 'dgms': Persistence diagrams for each homology dimension (from Ripser)
     
     Examples
     --------
