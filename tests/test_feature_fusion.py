@@ -89,11 +89,9 @@ class TestFeatureFusion(unittest.TestCase):
         
         # Should reshape to 2D
         self.assertEqual(fused.ndim, 2)
-        # 1 sample, 5 local + 3 global = 8 features
-        # But after reshape, local is (5,1) and global is (3,1)
-        # Actually, local 1D becomes (5, 1) and global 1D becomes (1, 3)
-        # After repeating global for 5 samples, we get (5, 3)
-        # So final shape is (5, 1+3) = (5, 4)
+        # Local has 5 elements, global has 3 elements
+        # After reshaping: local (5, 1), global (1, 3) repeated to (5, 3)
+        # Final shape: (5, 1+3) = (5, 4)
         self.assertEqual(fused.shape, (5, 4))
 
 

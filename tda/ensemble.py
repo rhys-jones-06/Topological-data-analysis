@@ -87,6 +87,14 @@ class MetaLearner:
         else:
             all_signals = [tda_signals, other_signals]
         
+        # Validate shapes match
+        expected_shape = all_signals[0].shape
+        for i, sig in enumerate(all_signals[1:], 1):
+            if sig.shape != expected_shape:
+                raise ValueError(
+                    f"Signal {i} shape {sig.shape} does not match expected shape {expected_shape}"
+                )
+        
         # Stack signals as features
         X = np.column_stack([s.flatten() for s in all_signals])
         y = targets.flatten()

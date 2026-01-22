@@ -246,7 +246,7 @@ class MarketMutualModel:
         persistence = compute_persistent_homology(
             corr_matrix,
             max_dimension=1,
-            use_correlation=False
+            use_correlation=False  # corr_matrix is already a correlation, not time series
         )
         
         h0_features = extract_h0_features(persistence['dgms'][0])

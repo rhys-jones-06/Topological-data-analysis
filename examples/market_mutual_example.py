@@ -189,9 +189,13 @@ def main():
     # Create ensemble using simple weighted average
     print("   - Combining TDA and NN signals using weighted average...")
     
-    # Convert to numpy arrays and ensure same shape
+    # Ensure arrays have the same shape
     tda_signals_array = tda_signals_test.reshape(-1)
     nn_signals_array = nn_signals_test.iloc[-1].values.reshape(-1)
+    
+    # Verify shapes match
+    assert tda_signals_array.shape == nn_signals_array.shape, \
+        f"Shape mismatch: TDA {tda_signals_array.shape} vs NN {nn_signals_array.shape}"
     
     # Simple weighted combination based on regime confidence
     tda_weight = predictions['regime_confidence']
