@@ -10,14 +10,14 @@ This module provides functionality to:
 import numpy as np
 import pandas as pd
 from scipy.linalg import expm
-from typing import Union, Tuple
+from typing import Union, Tuple, List
 
 
 def compute_rolling_correlation(
     data: pd.DataFrame,
     window: int,
     min_periods: int = None
-) -> pd.DataFrame:
+) -> List[pd.DataFrame]:
     """
     Calculate rolling correlation matrices between N assets.
     
@@ -38,9 +38,9 @@ def compute_rolling_correlation(
     
     Returns
     -------
-    pd.DataFrame
-        A 3D DataFrame structure containing correlation matrices over time.
-        Returns a DataFrame with MultiIndex representing (time, asset1, asset2).
+    List[pd.DataFrame]
+        A list of correlation matrices, one for each time step in the rolling window.
+        Each DataFrame contains a correlation matrix with a 'timestamp' column.
     
     Examples
     --------
@@ -59,8 +59,8 @@ def compute_rolling_correlation(
         # Extract the rolling window
         window_data = data.iloc[i - window + 1:i + 1]
         
-        # Compute correlation matrix
-        corr_matrix = window_data.corr()
+        # Compute correlation matrix with min_periods
+        corr_matrix = window_data.corr(min_periods=min_periods)
         
         # Store with timestamp
         corr_matrix['timestamp'] = data.index[i] if hasattr(data, 'index') else i
