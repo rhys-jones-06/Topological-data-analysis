@@ -8,8 +8,7 @@ and structural stability using topological data analysis.
 import numpy as np
 import pandas as pd
 from typing import Dict, Optional, Tuple, List
-from gtda.homology import VietorisRipsPersistence
-from gtda.diagrams import PersistenceEntropy, Amplitude
+import ripser
 
 
 class TDAHomology:
@@ -26,7 +25,7 @@ class TDAHomology:
     def __init__(
         self,
         max_edge_length: float = 2.0,
-        homology_dimensions: Tuple[int, ...] = (0, 1, 2),
+        max_dimension: int = 2,
         n_jobs: int = 1
     ):
         """
@@ -36,24 +35,14 @@ class TDAHomology:
         ----------
         max_edge_length : float, optional
             Maximum edge length for Vietoris-Rips. Default is 2.0.
-        homology_dimensions : tuple, optional
-            Homology dimensions to compute. Default is (0, 1, 2).
+        max_dimension : int, optional
+            Maximum homology dimension to compute. Default is 2.
         n_jobs : int, optional
-            Number of parallel jobs. Default is 1.
+            Number of parallel jobs (not used with ripser). Default is 1.
         """
         self.max_edge_length = max_edge_length
-        self.homology_dimensions = homology_dimensions
+        self.max_dimension = max_dimension
         self.n_jobs = n_jobs
-        
-        # Initialize Giotto-TDA pipeline
-        self.vr_persistence = VietorisRipsPersistence(
-            homology_dimensions=homology_dimensions,
-            max_edge_length=max_edge_length,
-            n_jobs=n_jobs
-        )
-        
-        self.persistence_entropy = PersistenceEntropy(n_jobs=n_jobs)
-        self.persistence_amplitude = Amplitude(metric='persistence_image', n_jobs=n_jobs)
         
         self.last_diagrams = None
     
@@ -79,7 +68,7 @@ class TDAHomology:
     def compute_persistence_diagrams(
         self,
         correlation_matrix: np.ndarray
-    ) -> np.ndarray:
+    ) -> Dict[str, np.ndarray]:
         """
         Compute persistence diagrams from correlation matrix.
         
@@ -90,34 +79,31 @@ class TDAHomology:
         
         Returns
         -------
-        np.ndarray
-            Persistence diagrams (shape: (1, n_points, 3))
-            Each point: (birth, death, homology_dimension)
+        dict
+            Dictionary with 'dgms' containing list of persistence diagrams
         """
         # Convert to distance matrix
         distance_matrix = self.correlation_to_distance(correlation_matrix)
         
-        # Giotto-TDA expects point clouds, but we can use distance matrix
-        # Reshape to (n_samples=1, n_points, n_points) for distance matrix
-        distance_matrix_3d = distance_matrix[np.newaxis, :, :]
-        
-        # Compute persistence diagrams
-        diagrams = self.vr_persistence.fit_transform_plot(
-            distance_matrix_3d,
-            sample=0
+        # Compute persistence using ripser
+        result = ripser.ripser(
+            distance_matrix,
+            maxdim=self.max_dimension,
+            thresh=self.max_edge_length,
+            distance_matrix=True
         )
         
-        self.last_diagrams = diagrams
-        return diagrams
+        self.last_diagrams = result['dgms']
+        return result
     
-    def extract_h0_features(self, diagrams: Optional[np.ndarray] = None) -> Dict[str, float]:
+    def extract_h0_features(self, diagrams: Optional[List[np.ndarray]] = None) -> Dict[str, float]:
         """
         Extract features from H0 persistence (connected components/clusters).
         
         Parameters
         ----------
-        diagrams : np.ndarray, optional
-            Persistence diagrams. If None, uses last computed.
+        diagrams : list of np.ndarray, optional
+            List of persistence diagrams. If None, uses last computed.
         
         Returns
         -------
@@ -130,10 +116,10 @@ class TDAHomology:
         if diagrams is None:
             raise ValueError("No diagrams available. Compute first.")
         
-        # Extract H0 points (dimension 0)
-        h0_points = diagrams[diagrams[:, :, 2] == 0]
+        # Extract H0 diagram (dimension 0)
+        h0_diagram = diagrams[0]
         
-        if len(h0_points) == 0:
+        if len(h0_diagram) == 0:
             return {
                 'num_components': 0,
                 'max_persistence': 0.0,
@@ -143,7 +129,7 @@ class TDAHomology:
             }
         
         # Persistence = death - birth
-        persistence = h0_points[:, :, 1] - h0_points[:, :, 0]
+        persistence = h0_diagram[:, 1] - h0_diagram[:, 0]
         persistence = persistence[persistence < np.inf]  # Remove infinite bars
         
         features = {
@@ -156,14 +142,14 @@ class TDAHomology:
         
         return features
     
-    def extract_h1_features(self, diagrams: Optional[np.ndarray] = None) -> Dict[str, float]:
+    def extract_h1_features(self, diagrams: Optional[List[np.ndarray]] = None) -> Dict[str, float]:
         """
         Extract features from H1 persistence (loops/cycles).
         
         Parameters
         ----------
-        diagrams : np.ndarray, optional
-            Persistence diagrams. If None, uses last computed.
+        diagrams : list of np.ndarray, optional
+            List of persistence diagrams. If None, uses last computed.
         
         Returns
         -------
@@ -176,10 +162,19 @@ class TDAHomology:
         if diagrams is None:
             raise ValueError("No diagrams available. Compute first.")
         
-        # Extract H1 points (dimension 1)
-        h1_points = diagrams[diagrams[:, :, 2] == 1]
+        # Extract H1 diagram (dimension 1)
+        if len(diagrams) < 2:
+            return {
+                'num_loops': 0,
+                'max_persistence': 0.0,
+                'mean_persistence': 0.0,
+                'std_persistence': 0.0,
+                'total_persistence': 0.0
+            }
         
-        if len(h1_points) == 0:
+        h1_diagram = diagrams[1]
+        
+        if len(h1_diagram) == 0:
             return {
                 'num_loops': 0,
                 'max_persistence': 0.0,
@@ -189,7 +184,7 @@ class TDAHomology:
             }
         
         # Persistence = death - birth
-        persistence = h1_points[:, :, 1] - h1_points[:, :, 0]
+        persistence = h1_diagram[:, 1] - h1_diagram[:, 0]
         persistence = persistence[persistence < np.inf]
         
         features = {
@@ -224,7 +219,8 @@ class TDAHomology:
         float
             Persistence score (normalized to roughly [0, 1])
         """
-        diagrams = self.compute_persistence_diagrams(correlation_matrix)
+        result = self.compute_persistence_diagrams(correlation_matrix)
+        diagrams = result['dgms']
         
         h0_features = self.extract_h0_features(diagrams)
         h1_features = self.extract_h1_features(diagrams)
@@ -268,7 +264,8 @@ class TDAHomology:
         dict
             Regime classification with details
         """
-        diagrams = self.compute_persistence_diagrams(correlation_matrix)
+        result = self.compute_persistence_diagrams(correlation_matrix)
+        diagrams = result['dgms']
         
         h0_features = self.extract_h0_features(diagrams)
         h1_features = self.extract_h1_features(diagrams)
@@ -318,20 +315,24 @@ class TDAHomology:
         list of tuples
             List of (birth, death) intervals for the specified dimension
         """
-        diagrams = self.compute_persistence_diagrams(correlation_matrix)
+        result = self.compute_persistence_diagrams(correlation_matrix)
+        diagrams = result['dgms']
         
-        # Extract points for the specified dimension
-        dim_points = diagrams[diagrams[:, :, 2] == dimension]
+        # Extract diagram for the specified dimension
+        if dimension >= len(diagrams):
+            return []
+        
+        dim_diagram = diagrams[dimension]
         
         # Extract birth and death times
-        barcode = [(float(p[0]), float(p[1])) for p in dim_points if p[1] < np.inf]
+        barcode = [(float(p[0]), float(p[1])) for p in dim_diagram if p[1] < np.inf]
         
         return barcode
 
 
 def create_sample_tda_homology(
     max_edge_length: float = 2.0,
-    homology_dimensions: Tuple[int, ...] = (0, 1, 2)
+    max_dimension: int = 2
 ) -> TDAHomology:
     """
     Factory function to create a sample TDA Homology analyzer.
@@ -340,8 +341,8 @@ def create_sample_tda_homology(
     ----------
     max_edge_length : float, optional
         Maximum edge length. Default is 2.0.
-    homology_dimensions : tuple, optional
-        Homology dimensions to compute. Default is (0, 1, 2).
+    max_dimension : int, optional
+        Maximum homology dimension. Default is 2.
     
     Returns
     -------
@@ -350,6 +351,6 @@ def create_sample_tda_homology(
     """
     return TDAHomology(
         max_edge_length=max_edge_length,
-        homology_dimensions=homology_dimensions,
+        max_dimension=max_dimension,
         n_jobs=1
     )

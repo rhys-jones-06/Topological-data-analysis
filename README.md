@@ -535,3 +535,209 @@ The Market Mutual Model follows a modular architecture:
 7. **Backtesting**: Validate strategy with transaction costs
 
 This modular design allows each component to be used independently or as part of the complete pipeline.
+
+## The TopologyEngine - Multi-Scale Structural Alpha Engine
+
+### Overview
+
+The TopologyEngine is a production-grade ensemble system that integrates three independent analytical modules into a unified decision framework:
+
+1. **Neural Network Strategy** (`nn_strategy.py`) - Provides short-horizon (24-48 hour) price predictions using deep learning
+2. **Graph Diffusion** (`graph_diffusion.py`) - Analyzes capital flow patterns through Laplacian diffusion on correlation graphs
+3. **TDA Homology** (`tda_homology.py`) - Measures market structural stability using persistent homology
+
+### Architecture
+
+The TopologyEngine uses **Feature-Level Fusion with Topological Gating**:
+
+- **Data Orchestrator**: Synchronizes OHLCV data across all modules
+- **Gating Network**: Applies topological regime detection to modulate neural network confidence
+- **Risk-Adjusted Output**: Produces actionable signals with confidence scores and hedge suggestions
+
+### Key Innovation: Topological Gating
+
+If persistent homology detects high topological instability (H₁ persistence above threshold), the engine automatically forces a NEUTRAL/CASH signal regardless of the neural network prediction. This prevents overconfidence during market fragmentation or regime transitions.
+
+### Usage
+
+```python
+from topology_engine import create_topology_engine
+import pandas as pd
+
+# Create and configure the engine
+engine = create_topology_engine(
+    instability_threshold=0.5,
+    nn_hidden_layers=(100, 50),
+    correlation_threshold=0.3
+)
+
+# Train on historical data
+engine.fit(training_data, single_asset_mode=True, horizon=1)
+
+# Generate prediction with topological gating
+prediction = engine.predict(recent_data, return_details=True)
+
+print(f"Signal: {prediction['final_signal']}")
+print(f"Confidence: {prediction['confidence_score']:.3f}")
+print(f"Regime: {prediction['regime_classification']}")
+print(f"Suggested Hedge: {prediction['suggested_hedge']}")
+
+# Export as JSON
+json_output = engine.to_json(prediction)
+```
+
+### Output Format
+
+The engine produces a **Risk-Adjusted Alpha Map** in JSON format:
+
+```json
+{
+  "timestamp": "2026-01-22T19:44:06",
+  "final_signal": "LONG" | "SHORT" | "NEUTRAL",
+  "confidence_score": 0.75,
+  "confidence_interval": [0.65, 0.85],
+  "regime_classification": "Stable" | "Fragmented" | "Trending" | "Stressed",
+  "nn_predict_proba": 0.82,
+  "persistence_score": 0.35,
+  "graph_leakage": 0.28,
+  "suggested_hedge": {
+    "instrument": "VX_FUT",
+    "ratio": 0.15
+  }
+}
+```
+
+### Walk-Forward Validation
+
+Industry-standard validation with anchored rolling windows and purging to prevent look-ahead bias:
+
+```python
+from walk_forward_tester import create_walk_forward_tester
+
+# Create tester with 36-month training, 12-month testing
+wf_tester = create_walk_forward_tester(
+    train_months=36,
+    test_months=12,
+    anchored=True
+)
+
+# Define model trainer and predictor
+def train_model(train_data):
+    engine = create_topology_engine()
+    engine.fit(train_data, single_asset_mode=True)
+    return engine
+
+def predict_model(engine, test_data):
+    return engine.predict(test_data)
+
+# Run validation
+results = wf_tester.run(
+    data=historical_data,
+    model_trainer=train_model,
+    model_predictor=predict_model,
+    metric_calculator=calculate_metrics
+)
+
+print(f"Average Sharpe: {results['aggregated']['sharpe_mean']:.2f}")
+```
+
+### Monte Carlo Stress Testing
+
+Test strategy robustness using synthetic data that preserves topological structure:
+
+```python
+from monte_carlo_stress import create_monte_carlo_tester
+
+# Create stress tester
+mc_tester = create_monte_carlo_tester(
+    n_simulations=1000,
+    block_size=10
+)
+
+# Define strategy evaluator
+def evaluate_strategy(data):
+    # Your evaluation logic
+    return {'sharpe': ..., 'returns': ...}
+
+# Run stress test
+stress_results = mc_tester.run_stress_test(
+    original_data=returns_data,
+    strategy_evaluator=evaluate_strategy,
+    generation_method='block_bootstrap'
+)
+
+# Assess robustness
+assessment = mc_tester.assess_robustness(stress_results)
+print(f"Is Robust: {assessment['is_robust']}")
+print(f"Conclusion: {assessment['summary']['conclusion']}")
+```
+
+### Examples
+
+See the complete demonstration:
+
+```bash
+python examples/topology_engine_example.py
+```
+
+This example includes:
+1. Basic prediction workflow
+2. Walk-forward validation
+3. Monte Carlo stress testing
+
+### Testing
+
+Run TopologyEngine tests:
+
+```bash
+python -m unittest tests.test_topology_engine -v
+```
+
+### Regime Classifications
+
+- **Stable**: Low fragmentation, coherent market structure, normal operation
+- **Trending**: Directional market with coherent cycles, reduced position sizing
+- **Fragmented**: Multiple disconnected clusters, significant uncertainty
+- **Stressed**: High fragmentation + feedback loops, maximum caution
+
+### Components
+
+#### Neural Network Strategy
+- MLPClassifier with configurable architecture
+- Features: momentum, volatility, price/MA ratios, volume
+- Binary classification (up/down)
+- Returns probability of upward movement
+
+#### Graph Diffusion
+- Builds correlation graph from asset relationships
+- Computes Laplacian and heat kernel diffusion
+- Identifies capital sinks and sources
+- Leakage score indicates market fragmentation
+
+#### TDA Homology
+- Uses Vietoris-Rips filtration on correlation distances
+- H₀ features: Cluster count and persistence
+- H₁ features: Feedback loop count and persistence
+- Regime classification based on topological signatures
+
+#### Gating Network
+- Combines NN probability with TDA persistence score
+- Applies regime-based weighting
+- Forces NEUTRAL when persistence > threshold
+- Computes confidence intervals
+
+### Production Considerations
+
+1. **Data Quality**: Ensure clean, synchronized OHLCV data across all assets
+2. **Latency**: Graph and TDA computations add ~100-500ms per prediction
+3. **Retraining**: Recommended to retrain NN monthly, recalibrate thresholds quarterly
+4. **Thresholds**: Calibrate instability_threshold on historical data (typical range: 0.4-0.6)
+5. **Monitoring**: Track regime classification distribution and confidence score trends
+
+### References
+
+- López de Prado, M. (2018). *Advances in Financial Machine Learning*. Wiley.
+- Edelsbrunner, H., & Harer, J. (2010). *Computational Topology: An Introduction*. AMS.
+- Newman, M. (2010). *Networks: An Introduction*. Oxford University Press.
+
+
