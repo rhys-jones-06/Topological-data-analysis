@@ -16,6 +16,34 @@ from typing import Dict, Tuple, Union, Optional
 from ripser import ripser
 
 
+def _compute_persistence_entropy(persistences: np.ndarray) -> float:
+    """
+    Compute entropy of a persistence distribution.
+    
+    Helper function to calculate the Shannon entropy of persistence values,
+    used as a measure of the complexity of the topological features.
+    
+    Parameters
+    ----------
+    persistences : np.ndarray
+        Array of persistence values (death - birth).
+    
+    Returns
+    -------
+    float
+        Entropy of the persistence distribution.
+    """
+    if len(persistences) == 0 or np.sum(persistences) == 0:
+        return 0.0
+    
+    # Normalize to get probability distribution
+    probs = persistences / np.sum(persistences)
+    # Remove zeros to avoid log(0)
+    probs = probs[probs > 0]
+    # Calculate Shannon entropy
+    return float(-np.sum(probs * np.log(probs)))
+
+
 def build_vietoris_rips_filtration(
     correlation_matrix: np.ndarray,
     max_dimension: int = 2,
@@ -186,22 +214,12 @@ def extract_h0_features(persistence_diagram: np.ndarray) -> Dict[str, float]:
     # Compute persistence (death - birth)
     persistences = finite_dgm[:, 1] - finite_dgm[:, 0]
     
-    # Compute entropy of persistence distribution
-    if len(persistences) > 0 and np.sum(persistences) > 0:
-        # Normalize to get probability distribution
-        probs = persistences / np.sum(persistences)
-        # Remove zeros to avoid log(0)
-        probs = probs[probs > 0]
-        persistence_entropy = -np.sum(probs * np.log(probs))
-    else:
-        persistence_entropy = 0.0
-    
     return {
         'num_components': len(finite_dgm),
         'max_persistence': float(np.max(persistences)) if len(persistences) > 0 else 0.0,
         'mean_persistence': float(np.mean(persistences)) if len(persistences) > 0 else 0.0,
         'std_persistence': float(np.std(persistences)) if len(persistences) > 0 else 0.0,
-        'persistence_entropy': float(persistence_entropy)
+        'persistence_entropy': _compute_persistence_entropy(persistences)
     }
 
 
@@ -254,22 +272,12 @@ def extract_h1_features(persistence_diagram: np.ndarray) -> Dict[str, float]:
     # Compute persistence (death - birth)
     persistences = finite_dgm[:, 1] - finite_dgm[:, 0]
     
-    # Compute entropy of persistence distribution
-    if len(persistences) > 0 and np.sum(persistences) > 0:
-        # Normalize to get probability distribution
-        probs = persistences / np.sum(persistences)
-        # Remove zeros to avoid log(0)
-        probs = probs[probs > 0]
-        persistence_entropy = -np.sum(probs * np.log(probs))
-    else:
-        persistence_entropy = 0.0
-    
     return {
         'num_loops': len(finite_dgm),
         'max_persistence': float(np.max(persistences)) if len(persistences) > 0 else 0.0,
         'mean_persistence': float(np.mean(persistences)) if len(persistences) > 0 else 0.0,
         'std_persistence': float(np.std(persistences)) if len(persistences) > 0 else 0.0,
-        'persistence_entropy': float(persistence_entropy),
+        'persistence_entropy': _compute_persistence_entropy(persistences),
         'total_persistence': float(np.sum(persistences)) if len(persistences) > 0 else 0.0
     }
 
