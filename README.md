@@ -24,6 +24,25 @@ A Python package for analyzing financial data using graph theory and topological
 ### Residual Analysis
 - **Mispricing Detection**: Subtract expected returns from actual returns to isolate local mispricings and anomalies
 
+### Market Mutual Model - Advanced Inference System
+- **Feature Fusion**: Combine local residuals (graph diffusion) with global topological features (persistent homology)
+- **Regime Detection**: Classify market states as "stable", "stressed", or "transitioning" using:
+  - Hidden Markov Models (HMM)
+  - Clustering algorithms (K-means, GMM)
+  - Rule-based topological classification
+- **Risk Management**: Scale position sizes based on topological persistence and market regime
+  - Dynamic leverage adjustment based on market stability
+  - Kelly criterion with topological confidence
+  - Portfolio heat monitoring
+- **Ensemble Integration**: Combine TDA signals with neural networks and other models
+  - Meta-learning with Gradient Boosting
+  - Weighted averaging strategies
+  - Stacking approaches
+- **Backtesting Engine**: Vectorized backtester with transaction costs and slippage
+  - Walk-forward analysis
+  - Strategy comparison
+  - Performance metrics (Sharpe, Sortino, Calmar ratios)
+
 ## Installation
 
 1. Clone the repository:
@@ -139,6 +158,93 @@ image_features = vectorize_persistence_diagrams(
 )
 ```
 
+### Market Mutual Model Example - Complete Inference Pipeline
+
+```python
+import pandas as pd
+from tda import MarketMutualModel, Backtester
+
+# 1. Initialize the Market Mutual Model
+model = MarketMutualModel(
+    regime_detector_type='hmm',  # or 'clustering', 'rule_based'
+    n_regimes=3,                 # stable, transitioning, stressed
+    random_state=42
+)
+
+# 2. Train on historical data
+model.fit(
+    asset_returns,  # DataFrame of asset returns
+    window=20       # Rolling window for correlation
+)
+
+# 3. Generate predictions with detailed information
+predictions = model.predict(test_returns, return_details=True)
+
+print(f"Current regime: {predictions['regime']}")
+print(f"Regime confidence: {predictions['regime_confidence']:.3f}")
+print(f"Persistence score: {predictions['persistence_score']:.3f}")
+print(f"Trading signals: {predictions['signals']}")
+
+# 4. Get risk-adjusted positions for ensemble
+# Combine with signals from neural network or other models
+adjusted_positions = model.get_risk_adjusted_positions(
+    asset_returns=test_returns,
+    base_signals=neural_net_signals  # From your NN model
+)
+
+# 5. Backtest the strategy
+backtester = Backtester(
+    transaction_cost=0.001,  # 0.1%
+    slippage=0.0005,        # 0.05%
+    initial_capital=100000.0
+)
+
+results = backtester.run(
+    returns=test_returns,
+    signals=pd.DataFrame(predictions['signals'])
+)
+
+print(f"\nBacktest Results:")
+print(f"Total Return: {results['metrics']['total_return']:.2%}")
+print(f"Sharpe Ratio: {results['metrics']['sharpe_ratio']:.3f}")
+print(f"Max Drawdown: {results['metrics']['max_drawdown']:.2%}")
+```
+
+### Ensemble Learning Example
+
+```python
+from tda import MetaLearner, combine_tda_with_neural_net
+
+# Option 1: Simple weighted combination
+combined_signal = combine_tda_with_neural_net(
+    tda_signal=tda_predictions,
+    nn_signal=neural_net_predictions,
+    tda_confidence=0.7,
+    nn_confidence=0.8,
+    method='weighted'
+)
+
+# Option 2: Meta-learning with Gradient Boosting
+meta_learner = MetaLearner(
+    method='boosting',
+    task='regression',
+    n_estimators=100
+)
+
+# Train meta-learner
+meta_learner.fit(
+    tda_signals=tda_train_signals,
+    other_signals=[nn_train_signals, momentum_signals],
+    targets=actual_returns
+)
+
+# Generate ensemble predictions
+ensemble_predictions = meta_learner.predict(
+    tda_signals=tda_test_signals,
+    other_signals=[nn_test_signals, momentum_signals]
+)
+```
+
 ### Complete Examples
 
 See example scripts for complete working demonstrations:
@@ -149,6 +255,9 @@ python examples/example_usage.py
 
 # TDA layer for market shape analysis
 python examples/tda_layer_example.py
+
+# Complete Market Mutual Model workflow
+python examples/market_mutual_example.py
 ```
 
 ## API Reference
@@ -302,6 +411,64 @@ Identify market regimes based on topological features.
 **Returns:**
 - Dictionary describing the market regime
 
+### market_mutual_model module
+
+#### MarketMutualModel(regime_detector_type='hmm', n_regimes=3, ...)
+Main inference model integrating feature fusion, regime detection, and risk management.
+
+**Parameters:**
+- `regime_detector_type` (str): Type of detector - 'hmm', 'clustering', or 'rule_based' (default: 'hmm')
+- `n_regimes` (int): Number of regimes to detect (default: 3)
+- `feature_fusion_params` (dict, optional): Parameters for FeatureFusion
+- `risk_manager_params` (dict, optional): Parameters for RiskManager
+- `random_state` (int, optional): Random seed
+
+**Key Methods:**
+- `fit(asset_returns, window=20)`: Train model on historical data
+- `predict(asset_returns, return_details=False)`: Generate trading signals
+- `predict_single_signal(asset_returns)`: Generate aggregate market signal
+- `get_risk_adjusted_positions(asset_returns, base_signals)`: Adjust external signals with TDA risk management
+
+### ensemble module
+
+#### MetaLearner(method='weighted_average', task='regression', ...)
+Ensemble combination of TDA and other model signals.
+
+**Parameters:**
+- `method` (str): 'weighted_average', 'stacking', or 'boosting' (default: 'weighted_average')
+- `task` (str): 'regression' or 'classification' (default: 'regression')
+- `random_state` (int, optional): Random seed
+
+**Key Methods:**
+- `fit(tda_signals, other_signals, targets)`: Train meta-learner
+- `predict(tda_signals, other_signals)`: Generate ensemble predictions
+- `get_feature_importance()`: Get importance scores if available
+
+#### combine_tda_with_neural_net(tda_signal, nn_signal, tda_confidence, nn_confidence, method='weighted')
+Convenience function to combine TDA and neural network signals.
+
+### backtesting module
+
+#### Backtester(transaction_cost=0.001, slippage=0.0005, ...)
+Vectorized backtester with transaction costs and slippage.
+
+**Parameters:**
+- `transaction_cost` (float): Transaction cost as fraction (default: 0.001)
+- `slippage` (float): Slippage as fraction (default: 0.0005)
+- `max_position` (float): Maximum position size (default: 1.0)
+- `initial_capital` (float): Initial capital (default: 100,000)
+
+**Key Methods:**
+- `run(returns, signals, rebalance_frequency=1)`: Run backtest
+
+**Returns dictionary with:**
+- `equity_curve`: Portfolio value over time
+- `positions`: Position history
+- `metrics`: Performance metrics (total_return, sharpe_ratio, max_drawdown, etc.)
+
+#### RollingBacktester(train_window, test_window, backtester=None)
+Rolling window backtester for walk-forward analysis.
+
 ## Testing
 
 Run the test suite:
@@ -321,6 +488,11 @@ All tests should pass, covering:
 - H₀ and H₁ feature extraction
 - Persistence landscapes and images
 - Market regime identification
+- Feature fusion
+- Regime detection (HMM, clustering, rule-based)
+- Risk management and position sizing
+- Ensemble learning
+- Backtesting with transaction costs
 
 ## Dependencies
 
@@ -344,3 +516,22 @@ This package is particularly useful for:
 - **Systemic Risk**: Modeling contagion effects and feedback loops in financial systems
 - **Market Regime Detection**: Using H₀ and H₁ features to classify market states (unified, fragmented, crisis)
 - **Machine Learning**: Converting topological features into vectors for predictive models
+- **Algorithmic Trading**: Combining TDA signals with neural networks for trading strategies
+- **Ensemble Modeling**: Integrating topological insights with traditional quantitative models
+- **Stress Testing**: Evaluating strategy performance during market regime transitions
+
+## Architecture
+
+The Market Mutual Model follows a modular architecture:
+
+1. **Data Layer**: Rolling correlation matrices and graph construction
+2. **Feature Extraction**:
+   - Local: Residuals and heat kernel diffusion
+   - Global: Persistent homology (H₀, H₁ features)
+3. **Feature Fusion**: Combine local and global features with normalization
+4. **Regime Detection**: Classify market state using HMM/clustering
+5. **Risk Management**: Position sizing based on topological persistence
+6. **Ensemble Integration**: Combine with neural networks and other models
+7. **Backtesting**: Validate strategy with transaction costs
+
+This modular design allows each component to be used independently or as part of the complete pipeline.

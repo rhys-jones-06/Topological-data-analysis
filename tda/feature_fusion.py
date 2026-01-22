@@ -70,13 +70,17 @@ class FeatureFusion:
         self : FeatureFusion
             Fitted instance.
         """
+        # Handle 1D local features
+        if local_features.ndim == 1:
+            local_features = local_features.reshape(-1, 1)
+        
+        n_samples = local_features.shape[0]
+        
         # Convert global features dict to array if needed
-        global_array = self._flatten_global_features(global_features)
+        global_array = self._flatten_global_features(global_features, n_samples)
         
         if self.normalize:
             # Fit scalers
-            if local_features.ndim == 1:
-                local_features = local_features.reshape(-1, 1)
             if global_array.ndim == 1:
                 global_array = global_array.reshape(-1, 1)
                 
@@ -108,12 +112,16 @@ class FeatureFusion:
             Fused feature vector.
             Shape: (n_samples, n_local_features + n_global_features).
         """
-        # Convert global features dict to array if needed
-        global_array = self._flatten_global_features(global_features)
-        
-        # Handle 1D arrays
+        # Handle 1D local arrays
         if local_features.ndim == 1:
             local_features = local_features.reshape(-1, 1)
+        
+        n_samples = local_features.shape[0]
+        
+        # Convert global features dict to array if needed
+        global_array = self._flatten_global_features(global_features, n_samples)
+        
+        # Handle 1D global arrays
         if global_array.ndim == 1:
             global_array = global_array.reshape(-1, 1)
         
@@ -159,7 +167,8 @@ class FeatureFusion:
     
     def _flatten_global_features(
         self,
-        global_features: Union[np.ndarray, Dict[str, np.ndarray]]
+        global_features: Union[np.ndarray, Dict[str, np.ndarray]],
+        n_samples: int = 1
     ) -> np.ndarray:
         """
         Convert global features from dict format to array.
@@ -168,6 +177,8 @@ class FeatureFusion:
         ----------
         global_features : np.ndarray or dict
             Global features, either as array or dict of arrays.
+        n_samples : int
+            Number of samples to repeat features for.
         
         Returns
         -------
@@ -189,11 +200,18 @@ class FeatureFusion:
                     # If value is a scalar, add it directly
                     feature_list.append(float(value))
             
-            return np.array(feature_list).reshape(1, -1)
+            # Create array and repeat for n_samples
+            feature_array = np.array(feature_list).reshape(1, -1)
+            if n_samples > 1:
+                feature_array = np.repeat(feature_array, n_samples, axis=0)
+            return feature_array
         else:
             # Already an array
             if global_features.ndim == 1:
-                return global_features.reshape(1, -1)
+                feature_array = global_features.reshape(1, -1)
+                if n_samples > 1:
+                    feature_array = np.repeat(feature_array, n_samples, axis=0)
+                return feature_array
             return global_features
     
     def get_feature_names(
