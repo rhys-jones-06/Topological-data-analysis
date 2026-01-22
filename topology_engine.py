@@ -135,7 +135,10 @@ class GatingNetwork:
         nn_proba: float,
         persistence_score: float,
         regime: str,
-        graph_leakage: Optional[float] = None
+        graph_leakage: Optional[float] = None,
+        h0_features: Optional[Dict] = None,
+        h1_features: Optional[Dict] = None,
+        adaptive_threshold_info: Optional[Dict] = None
     ) -> Dict[str, any]:
         """
         Combine NN probability with TDA persistence using gating logic.
@@ -150,18 +153,44 @@ class GatingNetwork:
             Market regime classification
         graph_leakage : float, optional
             Graph leakage score (0 to 1)
+        h0_features : dict, optional
+            H0 topological features for detailed attribution
+        h1_features : dict, optional
+            H1 topological features for detailed attribution
+        adaptive_threshold_info : dict, optional
+            Adaptive threshold information from rolling baseline
         
         Returns
         -------
         dict
             Combined signal with final_signal, confidence_score, etc.
         """
+        # Build detailed reason attribution
+        reason_details = []
+        
+        # Use adaptive threshold if available, otherwise use static threshold
+        if adaptive_threshold_info is not None and adaptive_threshold_info.get('adaptive', False):
+            threshold = adaptive_threshold_info['threshold']
+            is_anomaly = adaptive_threshold_info['is_anomaly']
+            reason_details.append(f"adaptive_threshold={threshold:.3f}")
+            reason_details.append(f"baseline_mean={adaptive_threshold_info['baseline_mean']:.3f}")
+        else:
+            threshold = self.instability_threshold
+            is_anomaly = persistence_score > threshold
+            reason_details.append(f"static_threshold={threshold:.3f}")
+        
         # Check gating condition
-        if persistence_score > self.instability_threshold:
+        if is_anomaly:
             # Force neutral/cash due to high topological instability
             final_signal = "NEUTRAL"
             confidence_score = 0.2  # Low confidence
-            reason = "TopologicalInstability"
+            reason = "H1_instability_exceeded_threshold"
+            
+            # Add specific details about what caused the instability
+            if h1_features is not None and h1_features.get('max_persistence', 0) > 0.2:
+                reason_details.append(f"H1_max_persistence={h1_features['max_persistence']:.3f}")
+            if h0_features is not None and h0_features.get('num_components', 0) > 3:
+                reason_details.append(f"H0_fragmentation={h0_features['num_components']}_clusters")
         else:
             # Normal operation: use NN prediction
             # Apply regime-based weighting
@@ -173,10 +202,20 @@ class GatingNetwork:
             # Determine signal
             if adjusted_proba > 0.55:
                 final_signal = "LONG"
+                reason = "NN_prediction_bullish"
+                reason_details.append(f"nn_proba={nn_proba:.3f}")
             elif adjusted_proba < 0.45:
                 final_signal = "SHORT"
+                reason = "NN_prediction_bearish"
+                reason_details.append(f"nn_proba={nn_proba:.3f}")
             else:
                 final_signal = "NEUTRAL"
+                reason = "NN_prediction_neutral"
+                reason_details.append(f"nn_proba={nn_proba:.3f}")
+            
+            # Add regime information
+            reason_details.append(f"regime={regime}")
+            reason_details.append(f"regime_weight={regime_weight:.2f}")
             
             # Confidence score combines NN confidence and topological stability
             nn_confidence = abs(nn_proba - 0.5) * 2  # 0 to 1
@@ -184,12 +223,12 @@ class GatingNetwork:
             
             # Weighted combination
             confidence_score = (nn_confidence * 0.6 + tda_confidence * 0.4) * regime_weight
-            reason = "Normal"
         
         # Include graph leakage in confidence if available
-        if graph_leakage is not None:
+        if graph_leakage is not None and graph_leakage > 0.5:
             leakage_penalty = graph_leakage * 0.2
             confidence_score = max(confidence_score * (1 - leakage_penalty), 0.0)
+            reason_details.append(f"graph_leakage_penalty={leakage_penalty:.3f}")
         
         return {
             'final_signal': final_signal,
@@ -198,6 +237,7 @@ class GatingNetwork:
             'persistence_score': persistence_score,
             'regime': regime,
             'reason': reason,
+            'reason_details': reason_details,
             'graph_leakage': graph_leakage
         }
     
@@ -358,13 +398,19 @@ class TopologyEngine:
         regime_info = self.tda_homology.classify_regime(data_package['correlation'])
         persistence_score = regime_info['persistence_score']
         regime = regime_info['regime']
+        h0_features = regime_info.get('h0_features', {})
+        h1_features = regime_info.get('h1_features', {})
+        adaptive_threshold_info = regime_info.get('adaptive_threshold', None)
         
         # Apply gating network
         result = self.gating_network.combine_signals(
             nn_proba=nn_proba,
             persistence_score=persistence_score,
             regime=regime,
-            graph_leakage=graph_leakage
+            graph_leakage=graph_leakage,
+            h0_features=h0_features,
+            h1_features=h1_features,
+            adaptive_threshold_info=adaptive_threshold_info
         )
         
         # Compute confidence interval
@@ -389,13 +435,14 @@ class TopologyEngine:
             'nn_predict_proba': nn_proba,
             'persistence_score': persistence_score,
             'graph_leakage': graph_leakage,
-            'suggested_hedge': hedge_ratio
+            'suggested_hedge': hedge_ratio,
+            'reason': result['reason'],
+            'reason_details': result.get('reason_details', [])
         }
         
         if return_details:
             output['details'] = {
                 'regime_info': regime_info,
-                'reason': result['reason'],
                 'graph_metrics': self.graph_diffusion.compute_graph_metrics()
             }
         
@@ -465,7 +512,7 @@ class TopologyEngine:
         str
             JSON string
         """
-        # Create a simplified version for JSON export
+        # Create a simplified version for JSON export with topological attribution
         json_output = {
             'timestamp': prediction['timestamp'],
             'final_signal': prediction['final_signal'],
@@ -475,7 +522,9 @@ class TopologyEngine:
             'nn_predict_proba': prediction['nn_predict_proba'],
             'persistence_score': prediction['persistence_score'],
             'graph_leakage': prediction['graph_leakage'],
-            'suggested_hedge': prediction['suggested_hedge']
+            'suggested_hedge': prediction['suggested_hedge'],
+            'reason': prediction.get('reason', 'Unknown'),
+            'reason_details': prediction.get('reason_details', [])
         }
         
         return json.dumps(json_output, indent=2)

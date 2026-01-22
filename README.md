@@ -643,7 +643,7 @@ print(f"Average Sharpe: {results['aggregated']['sharpe_mean']:.2f}")
 
 ### Monte Carlo Stress Testing
 
-Test strategy robustness using synthetic data that preserves topological structure:
+Test strategy robustness using synthetic data that preserves topological structure and correlations:
 
 ```python
 from monte_carlo_stress import create_monte_carlo_tester
@@ -659,31 +659,169 @@ def evaluate_strategy(data):
     # Your evaluation logic
     return {'sharpe': ..., 'returns': ...}
 
-# Run stress test
+# Run stress test with GBM (default) to preserve correlations
 stress_results = mc_tester.run_stress_test(
     original_data=returns_data,
     strategy_evaluator=evaluate_strategy,
-    generation_method='block_bootstrap'
+    generation_method='gbm'  # Use Geometric Brownian Motion
 )
 
 # Assess robustness
 assessment = mc_tester.assess_robustness(stress_results)
 print(f"Is Robust: {assessment['is_robust']}")
 print(f"Conclusion: {assessment['summary']['conclusion']}")
+
+# Check correlation preservation
+if 'correlation_validation' in stress_results:
+    val = stress_results['correlation_validation']
+    print(f"Correlation preserved: {val['validation_rate']:.1%}")
+    print(f"Mean correlation diff: {val['mean_mean_diff']:.3f}")
 ```
+
+**Synthetic Data Generation Methods:**
+
+The system now supports multiple methods for generating synthetic data:
+
+1. **`gbm` (Geometric Brownian Motion)** - Default and recommended
+   - Uses GBM to generate realistic price paths
+   - Preserves correlation structure between assets using Cholesky decomposition
+   - Ensures TDA analysis remains meaningful (won't return 0)
+   - Best for: Realistic market simulations
+
+2. **`copula` (Gaussian Copula)**
+   - Separates marginal distributions from dependency structure
+   - Preserves both individual return distributions and correlations
+   - Uses empirical CDF transformation
+   - Best for: Complex dependency structures
+
+3. **`block_bootstrap`**
+   - Preserves short-term dependencies by resampling blocks
+   - Good for maintaining temporal patterns
+   - Best for: Time-series properties
+
+4. **`parametric`**
+   - Uses multivariate normal distribution
+   - Simpler but less realistic
+   - Best for: Quick tests
+
+### Recent Enhancements
+
+Three major enhancements have been added to the TDA system:
+
+#### 1. Adaptive TDA Persistence Score with Rolling Baseline
+
+The TDA persistence score is no longer static. It now compares current persistence to a rolling baseline (default: 30 days), making the gating adaptive based on historical context.
+
+**Why it matters:** A "hole" in the market structure might be normal during high-interest-rate environments but a sign of a crash during low-rate environments. The adaptive threshold adjusts to the current market regime.
+
+```python
+from tda_homology import TDAHomology
+
+# Create TDA with adaptive baseline
+tda = TDAHomology(baseline_window=30)
+
+# Classify regime - automatically updates baseline
+result = tda.classify_regime(correlation_matrix)
+
+# Check adaptive threshold information
+if 'adaptive_threshold' in result:
+    adaptive_info = result['adaptive_threshold']
+    print(f"Current persistence: {result['persistence_score']:.3f}")
+    print(f"Adaptive threshold: {adaptive_info['threshold']:.3f}")
+    print(f"Z-score: {adaptive_info['z_score']:.2f}")
+    print(f"Is anomaly: {adaptive_info['is_anomaly']}")
+
+# Access baseline statistics
+baseline_stats = tda.get_baseline_stats()
+print(f"Baseline mean: {baseline_stats['mean']:.3f}")
+print(f"Baseline std: {baseline_stats['std']:.3f}")
+```
+
+#### 2. Synthetic Data with Correlation Preservation (GBM & Copula)
+
+The Monte Carlo stress testing now includes GBM and Copula-based methods that ensure synthetic data maintains the same correlations as the real market. This prevents the TDA from returning 0 and making tests useless.
+
+```python
+from monte_carlo_stress import MonteCarloStressTest
+
+mc_tester = MonteCarloStressTest(n_simulations=1000)
+
+# Generate synthetic data using GBM
+synthetic_gbm = mc_tester.generate_synthetic_returns(
+    original_returns,
+    method='gbm'
+)
+
+# Validate correlation preservation
+validation = mc_tester.validate_correlation_preservation(
+    original_returns,
+    synthetic_gbm,
+    tolerance=0.15
+)
+
+print(f"Correlations preserved: {validation['is_valid']}")
+print(f"Max difference: {validation['max_correlation_diff']:.3f}")
+print(f"Mean difference: {validation['mean_correlation_diff']:.3f}")
+```
+
+#### 3. JSON Output with Topological Attribution
+
+The JSON output now includes detailed attribution information, making the model interpretable rather than a black box. Each signal includes a `reason` field specifying which feature caused the signal.
+
+```python
+from topology_engine import create_topology_engine
+
+engine = create_topology_engine(instability_threshold=0.5)
+engine.fit(training_data, single_asset_mode=True)
+
+prediction = engine.predict(test_data)
+
+# Access attribution information
+print(f"Signal: {prediction['final_signal']}")
+print(f"Reason: {prediction['reason']}")
+print(f"Details: {prediction['reason_details']}")
+
+# JSON output includes attribution
+json_output = engine.to_json(prediction)
+# Contains: reason, reason_details, persistence_score, etc.
+```
+
+**Reason Types:**
+
+- `H1_instability_exceeded_threshold` - TDA detected topological instability
+- `NN_prediction_bullish` - Neural network predicts upward movement
+- `NN_prediction_bearish` - Neural network predicts downward movement
+- `NN_prediction_neutral` - Neural network is uncertain
+
+**Reason Details:** Provides context like:
+- `adaptive_threshold=0.532` - The adaptive threshold value
+- `baseline_mean=0.312` - Mean of the rolling baseline
+- `H0_fragmentation=4_clusters` - Number of market clusters detected
+- `H1_max_persistence=0.234` - Maximum H1 persistence value
+- `regime=Fragmented` - Current market regime
+- `graph_leakage_penalty=0.180` - Graph fragmentation penalty
 
 ### Examples
 
-See the complete demonstration:
+See the complete demonstrations:
 
 ```bash
+# Original TopologyEngine demonstration
 python examples/topology_engine_example.py
+
+# New enhancements demonstration
+python examples/demo_enhancements.py
 ```
 
-This example includes:
+The topology_engine_example includes:
 1. Basic prediction workflow
 2. Walk-forward validation
 3. Monte Carlo stress testing
+
+The demo_enhancements includes:
+1. Adaptive persistence scoring demonstration
+2. GBM and Copula synthetic data generation
+3. Topological attribution examples
 
 ### Testing
 

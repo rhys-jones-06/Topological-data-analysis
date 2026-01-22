@@ -265,7 +265,7 @@ class TestGatingNetwork(unittest.TestCase):
         
         # Should be forced to NEUTRAL due to high persistence
         self.assertEqual(result['final_signal'], 'NEUTRAL')
-        self.assertEqual(result['reason'], 'TopologicalInstability')
+        self.assertEqual(result['reason'], 'H1_instability_exceeded_threshold')  # Updated reason string
 
 
 class TestTopologyEngine(unittest.TestCase):

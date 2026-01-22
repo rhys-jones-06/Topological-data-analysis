@@ -55,7 +55,7 @@ class MonteCarloStressTest:
     def generate_synthetic_returns(
         self,
         original_returns: pd.DataFrame,
-        method: str = 'block_bootstrap'
+        method: str = 'gbm'
     ) -> pd.DataFrame:
         """
         Generate synthetic returns preserving topological structure.
@@ -65,22 +65,165 @@ class MonteCarloStressTest:
         original_returns : pd.DataFrame
             Original returns data
         method : str, optional
-            Generation method: 'block_bootstrap', 'shuffle', or 'parametric'.
-            Default is 'block_bootstrap'.
+            Generation method: 'gbm', 'copula', 'block_bootstrap', 'shuffle', or 'parametric'.
+            Default is 'gbm' (Geometric Brownian Motion).
         
         Returns
         -------
         pd.DataFrame
             Synthetic returns with same shape as original
         """
-        if method == 'block_bootstrap':
+        if method == 'gbm':
+            return self._gbm_generation(original_returns)
+        elif method == 'copula':
+            return self._copula_generation(original_returns)
+        elif method == 'block_bootstrap':
             return self._block_bootstrap(original_returns)
         elif method == 'shuffle':
             return self._shuffle_returns(original_returns)
         elif method == 'parametric':
             return self._parametric_generation(original_returns)
         else:
-            raise ValueError(f"Unknown method: {method}")
+            raise ValueError(f"Unknown method: {method}. Use 'gbm', 'copula', 'block_bootstrap', 'shuffle', or 'parametric'.")
+    
+    def _gbm_generation(
+        self,
+        returns: pd.DataFrame
+    ) -> pd.DataFrame:
+        """
+        Generate returns using Geometric Brownian Motion (GBM).
+        
+        GBM preserves correlations between stocks by using the covariance matrix
+        to generate correlated random walks, ensuring the synthetic data maintains
+        the same correlation structure as the real market.
+        
+        Parameters
+        ----------
+        returns : pd.DataFrame
+            Original returns
+        
+        Returns
+        -------
+        pd.DataFrame
+            Synthetic returns generated via GBM
+        """
+        n_periods, n_assets = returns.shape
+        
+        # Estimate drift (mu) and volatility (sigma) from historical returns
+        mu = returns.mean().values
+        
+        # Get covariance matrix to preserve correlations
+        cov_matrix = returns.cov().values
+        
+        # Generate correlated random increments using Cholesky decomposition
+        # This ensures the correlation structure is maintained
+        try:
+            cholesky = np.linalg.cholesky(cov_matrix)
+        except np.linalg.LinAlgError:
+            # If covariance matrix is not positive definite, regularize it
+            min_eig = np.min(np.real(np.linalg.eigvals(cov_matrix)))
+            if min_eig < 0:
+                cov_matrix -= 1.5 * min_eig * np.eye(n_assets)
+            cholesky = np.linalg.cholesky(cov_matrix)
+        
+        # Generate independent standard normal random variables
+        z = np.random.standard_normal((n_periods, n_assets))
+        
+        # Transform to correlated random variables
+        correlated_z = z @ cholesky.T
+        
+        # Generate GBM returns: r_t = mu * dt + sigma * dW
+        # Using dt = 1 (daily returns)
+        dt = 1.0
+        synthetic_returns = mu * dt + correlated_z
+        
+        # Create DataFrame with same structure as input
+        synthetic_df = pd.DataFrame(
+            synthetic_returns,
+            index=returns.index,
+            columns=returns.columns
+        )
+        
+        return synthetic_df
+    
+    def _copula_generation(
+        self,
+        returns: pd.DataFrame
+    ) -> pd.DataFrame:
+        """
+        Generate returns using Gaussian Copula approach.
+        
+        Copula separates the marginal distributions from the dependency structure,
+        allowing us to preserve both the individual return distributions and the
+        correlation structure between assets.
+        
+        Parameters
+        ----------
+        returns : pd.DataFrame
+            Original returns
+        
+        Returns
+        -------
+        pd.DataFrame
+            Synthetic returns generated via Gaussian copula
+        """
+        n_periods, n_assets = returns.shape
+        
+        # Step 1: Transform each marginal to uniform distribution via empirical CDF
+        uniform_data = np.zeros_like(returns.values)
+        for i in range(n_assets):
+            # Rank transform to get empirical CDF values
+            ranks = returns.iloc[:, i].rank(method='average')
+            uniform_data[:, i] = ranks / (len(ranks) + 1)
+        
+        # Step 2: Transform to standard normal via inverse CDF
+        from scipy.stats import norm
+        normal_data = norm.ppf(uniform_data)
+        
+        # Step 3: Estimate correlation matrix from normal-transformed data
+        # Handle any NaN/Inf values
+        normal_data = np.nan_to_num(normal_data, nan=0.0, posinf=3.0, neginf=-3.0)
+        correlation_matrix = np.corrcoef(normal_data.T)
+        
+        # Step 4: Generate new correlated normal data
+        try:
+            synthetic_normal = np.random.multivariate_normal(
+                mean=np.zeros(n_assets),
+                cov=correlation_matrix,
+                size=n_periods
+            )
+        except np.linalg.LinAlgError:
+            # If correlation matrix is not positive definite, use Cholesky with regularization
+            min_eig = np.min(np.real(np.linalg.eigvals(correlation_matrix)))
+            if min_eig < 0:
+                correlation_matrix -= 1.5 * min_eig * np.eye(n_assets)
+            synthetic_normal = np.random.multivariate_normal(
+                mean=np.zeros(n_assets),
+                cov=correlation_matrix,
+                size=n_periods
+            )
+        
+        # Step 5: Transform back to uniform
+        synthetic_uniform = norm.cdf(synthetic_normal)
+        
+        # Step 6: Transform to original marginal distributions via inverse empirical CDF
+        synthetic_returns = np.zeros_like(synthetic_uniform)
+        for i in range(n_assets):
+            # Sort original returns to get empirical quantiles
+            sorted_returns = np.sort(returns.iloc[:, i].values)
+            # Map uniform values to quantiles
+            indices = (synthetic_uniform[:, i] * len(sorted_returns)).astype(int)
+            indices = np.clip(indices, 0, len(sorted_returns) - 1)
+            synthetic_returns[:, i] = sorted_returns[indices]
+        
+        # Create DataFrame with same structure as input
+        synthetic_df = pd.DataFrame(
+            synthetic_returns,
+            index=returns.index,
+            columns=returns.columns
+        )
+        
+        return synthetic_df
     
     def _block_bootstrap(
         self,
@@ -201,12 +344,68 @@ class MonteCarloStressTest:
         
         return synthetic
     
+    def validate_correlation_preservation(
+        self,
+        original_returns: pd.DataFrame,
+        synthetic_returns: pd.DataFrame,
+        tolerance: float = 0.15
+    ) -> Dict[str, any]:
+        """
+        Validate that synthetic data preserves correlations from original data.
+        
+        As per requirement: "If the synthetic data lacks correlation, the TDA will 
+        return 0, and the test will be useless." This method ensures correlations
+        are maintained.
+        
+        Parameters
+        ----------
+        original_returns : pd.DataFrame
+            Original returns data
+        synthetic_returns : pd.DataFrame
+            Synthetic returns data
+        tolerance : float, optional
+            Maximum allowed difference in correlations. Default is 0.15.
+        
+        Returns
+        -------
+        dict
+            Validation results including:
+            - 'is_valid': Whether correlations are preserved within tolerance
+            - 'max_correlation_diff': Maximum absolute difference in correlations
+            - 'mean_correlation_diff': Mean absolute difference
+            - 'original_correlation_matrix': Original correlation matrix
+            - 'synthetic_correlation_matrix': Synthetic correlation matrix
+        """
+        # Compute correlation matrices
+        orig_corr = original_returns.corr().values
+        synth_corr = synthetic_returns.corr().values
+        
+        # Compute differences (excluding diagonal)
+        n = orig_corr.shape[0]
+        mask = ~np.eye(n, dtype=bool)
+        
+        corr_diff = np.abs(orig_corr - synth_corr)
+        max_diff = np.max(corr_diff[mask])
+        mean_diff = np.mean(corr_diff[mask])
+        
+        is_valid = max_diff <= tolerance
+        
+        return {
+            'is_valid': is_valid,
+            'max_correlation_diff': float(max_diff),
+            'mean_correlation_diff': float(mean_diff),
+            'tolerance': tolerance,
+            'original_correlation_matrix': orig_corr,
+            'synthetic_correlation_matrix': synth_corr
+        }
+    
     def run_stress_test(
         self,
         original_data: pd.DataFrame,
         strategy_evaluator: Callable,
-        generation_method: str = 'block_bootstrap',
-        return_distribution: bool = True
+        generation_method: str = 'gbm',
+        return_distribution: bool = True,
+        validate_correlations: bool = True
     ) -> Dict[str, any]:
         """
         Run Monte Carlo stress test on a strategy.
@@ -218,9 +417,11 @@ class MonteCarloStressTest:
         strategy_evaluator : callable
             Function that evaluates strategy: evaluator(data) -> metrics_dict
         generation_method : str, optional
-            Synthetic data generation method. Default is 'block_bootstrap'.
+            Synthetic data generation method. Default is 'gbm' (Geometric Brownian Motion).
         return_distribution : bool, optional
             If True, return full distribution of metrics. Default is True.
+        validate_correlations : bool, optional
+            If True, validate that synthetic data preserves correlations. Default is True.
         
         Returns
         -------
@@ -231,8 +432,9 @@ class MonteCarloStressTest:
             - 'synthetic_metrics_std': Std dev of metrics
             - 'synthetic_metrics_distribution': Full distribution if requested
             - 'p_values': Statistical significance of original vs synthetic
+            - 'correlation_validation': Validation results if validate_correlations=True
         """
-        print(f"Running Monte Carlo stress test with {self.n_simulations} simulations...")
+        print(f"Running Monte Carlo stress test with {self.n_simulations} simulations using {generation_method}...")
         
         # Evaluate on original data
         try:
@@ -243,6 +445,7 @@ class MonteCarloStressTest:
         
         # Run simulations
         synthetic_results = []
+        correlation_validations = []
         
         for i in range(self.n_simulations):
             if (i + 1) % 100 == 0:
@@ -254,6 +457,21 @@ class MonteCarloStressTest:
                     original_data,
                     method=generation_method
                 )
+                
+                # Validate correlations if requested (only for first few to avoid overhead)
+                if validate_correlations and i < 10:
+                    validation = self.validate_correlation_preservation(
+                        original_data,
+                        synthetic_data
+                    )
+                    correlation_validations.append(validation)
+                    
+                    if not validation['is_valid'] and i == 0:
+                        warnings.warn(
+                            f"Synthetic data may not preserve correlations adequately. "
+                            f"Max diff: {validation['max_correlation_diff']:.3f}, "
+                            f"Mean diff: {validation['mean_correlation_diff']:.3f}"
+                        )
                 
                 # Evaluate strategy on synthetic data
                 metrics = strategy_evaluator(synthetic_data)
@@ -272,6 +490,17 @@ class MonteCarloStressTest:
             synthetic_results,
             return_distribution
         )
+        
+        # Add correlation validation summary if available
+        if correlation_validations:
+            valid_count = sum(1 for v in correlation_validations if v['is_valid'])
+            aggregated['correlation_validation'] = {
+                'n_validated': len(correlation_validations),
+                'n_valid': valid_count,
+                'validation_rate': valid_count / len(correlation_validations),
+                'mean_max_diff': np.mean([v['max_correlation_diff'] for v in correlation_validations]),
+                'mean_mean_diff': np.mean([v['mean_correlation_diff'] for v in correlation_validations])
+            }
         
         return aggregated
     
