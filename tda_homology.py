@@ -26,7 +26,8 @@ class TDAHomology:
         self,
         max_edge_length: float = 2.0,
         max_dimension: int = 2,
-        n_jobs: int = 1
+        n_jobs: int = 1,
+        baseline_window: int = 30
     ):
         """
         Initialize the TDA Homology analyzer.
@@ -39,12 +40,16 @@ class TDAHomology:
             Maximum homology dimension to compute. Default is 2.
         n_jobs : int, optional
             Number of parallel jobs (not used with ripser). Default is 1.
+        baseline_window : int, optional
+            Number of days for rolling baseline. Default is 30.
         """
         self.max_edge_length = max_edge_length
         self.max_dimension = max_dimension
         self.n_jobs = n_jobs
+        self.baseline_window = baseline_window
         
         self.last_diagrams = None
+        self.persistence_history = []  # Rolling history of persistence scores
     
     def correlation_to_distance(self, correlation_matrix: np.ndarray) -> np.ndarray:
         """
@@ -241,11 +246,114 @@ class TDAHomology:
         
         return score
     
+    def update_baseline(self, persistence_score: float):
+        """
+        Update the rolling baseline with a new persistence score.
+        
+        Parameters
+        ----------
+        persistence_score : float
+            New persistence score to add to history
+        """
+        self.persistence_history.append(persistence_score)
+        
+        # Keep only the last baseline_window entries
+        if len(self.persistence_history) > self.baseline_window:
+            self.persistence_history = self.persistence_history[-self.baseline_window:]
+    
+    def get_baseline_stats(self) -> Dict[str, float]:
+        """
+        Get statistics of the rolling baseline.
+        
+        Returns
+        -------
+        dict
+            Baseline statistics including mean, std, min, max
+        """
+        if len(self.persistence_history) == 0:
+            return {
+                'mean': 0.0,
+                'std': 0.0,
+                'min': 0.0,
+                'max': 0.0,
+                'count': 0
+            }
+        
+        history_array = np.array(self.persistence_history)
+        return {
+            'mean': float(np.mean(history_array)),
+            'std': float(np.std(history_array)),
+            'min': float(np.min(history_array)),
+            'max': float(np.max(history_array)),
+            'count': len(self.persistence_history)
+        }
+    
+    def compute_adaptive_threshold(
+        self,
+        current_score: float,
+        n_std: float = 2.0
+    ) -> Dict[str, any]:
+        """
+        Compute adaptive threshold based on rolling baseline.
+        
+        A "hole" in the market structure might be normal during high-interest-rate
+        environments but a sign of a crash during low-rate environments. This method
+        compares current persistence to a rolling baseline to make gating adaptive.
+        
+        Parameters
+        ----------
+        current_score : float
+            Current persistence score
+        n_std : float, optional
+            Number of standard deviations for threshold. Default is 2.0.
+        
+        Returns
+        -------
+        dict
+            Adaptive threshold information including:
+            - 'threshold': Adaptive threshold value
+            - 'is_anomaly': Whether current score exceeds threshold
+            - 'z_score': Z-score relative to baseline
+            - 'baseline_mean': Mean of baseline
+            - 'baseline_std': Std of baseline
+        """
+        baseline_stats = self.get_baseline_stats()
+        
+        # If we don't have enough history, use a conservative default
+        if baseline_stats['count'] < 5:
+            return {
+                'threshold': 0.5,  # Default threshold
+                'is_anomaly': current_score > 0.5,
+                'z_score': 0.0,
+                'baseline_mean': 0.0,
+                'baseline_std': 0.0,
+                'adaptive': False
+            }
+        
+        # Compute adaptive threshold as mean + n_std * std
+        threshold = baseline_stats['mean'] + n_std * baseline_stats['std']
+        
+        # Compute z-score
+        if baseline_stats['std'] > 0:
+            z_score = (current_score - baseline_stats['mean']) / baseline_stats['std']
+        else:
+            z_score = 0.0
+        
+        return {
+            'threshold': threshold,
+            'is_anomaly': current_score > threshold,
+            'z_score': z_score,
+            'baseline_mean': baseline_stats['mean'],
+            'baseline_std': baseline_stats['std'],
+            'adaptive': True
+        }
+    
     def classify_regime(
         self,
         correlation_matrix: np.ndarray,
         h0_threshold: float = 0.3,
-        h1_threshold: float = 0.2
+        h1_threshold: float = 0.2,
+        use_adaptive_threshold: bool = True
     ) -> Dict[str, any]:
         """
         Classify market regime based on topological features.
@@ -258,6 +366,8 @@ class TDAHomology:
             Threshold for H0 fragmentation. Default is 0.3.
         h1_threshold : float, optional
             Threshold for H1 loops. Default is 0.2.
+        use_adaptive_threshold : bool, optional
+            If True, use adaptive threshold based on rolling baseline. Default is True.
         
         Returns
         -------
@@ -269,6 +379,18 @@ class TDAHomology:
         
         h0_features = self.extract_h0_features(diagrams)
         h1_features = self.extract_h1_features(diagrams)
+        
+        # Compute current persistence score
+        current_persistence = self.compute_persistence_score(correlation_matrix)
+        
+        # Update baseline
+        self.update_baseline(current_persistence)
+        
+        # Compute adaptive threshold if requested
+        if use_adaptive_threshold:
+            adaptive_info = self.compute_adaptive_threshold(current_persistence)
+        else:
+            adaptive_info = None
         
         # Classification logic
         regime = "Stable"
@@ -287,13 +409,20 @@ class TDAHomology:
                 regime = "Trending"  # Has coherent cycles but not fragmented
             confidence = min(h1_features['max_persistence'] / h1_threshold, 1.0)
         
-        return {
+        result_dict = {
             'regime': regime,
             'confidence': confidence,
             'h0_features': h0_features,
             'h1_features': h1_features,
-            'persistence_score': self.compute_persistence_score(correlation_matrix)
+            'persistence_score': current_persistence
         }
+        
+        # Add adaptive threshold info if available
+        if adaptive_info is not None:
+            result_dict['adaptive_threshold'] = adaptive_info
+            result_dict['baseline_stats'] = self.get_baseline_stats()
+        
+        return result_dict
     
     def compute_topological_barcode(
         self,
